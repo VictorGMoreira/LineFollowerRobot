@@ -52,13 +52,30 @@ PID_t pid;
 
 volatile bool tick_flag = false;
 
+/* quantos ticks seguidos sem ver linha até considerar "perdida de fato"
+ * (10 ticks a 500Hz = 20ms — ajuste se achar sensível demais ou de menos) */
+#define LOST_DEBOUNCE_TICKS   10
+
+/* quanto tempo girando tentando recuperar até desistir e parar por
+ * segurança (1000 ticks a 500Hz = 2 segundos) */
+#define LOST_TIMEOUT_TICKS    1000
+
+/* velocidade fixa de giro durante a tentativa de recuperação
+ * (mesma escala do output do PID, cabe dentro de BASE_SPEED_DUTY) */
+#define RECOVERY_TURN_OUTPUT  1500.0f
+
+int32_t  last_error_sign = 0;     /* +1, -1 ou 0 (nunca viu linha ainda) */
+uint16_t lost_debounce_count = 0; /* ticks seguidos sem linha, dentro de SEGUINDO_LINHA */
+uint16_t lost_timeout_count  = 0; /* ticks seguidos tentando recuperar, dentro de LINHA_PERDIDA */
+
 typedef enum {
     STATE_INIT,
-    STATE_SEGUINDO_LINHA
+    STATE_SEGUINDO_LINHA,
+    STATE_LINHA_PERDIDA,
+    STATE_PARADO_SEGURANCA
 } RobotState_t;
 
 RobotState_t robot_state = STATE_INIT;
-
 
 /* USER CODE END PV */
 
