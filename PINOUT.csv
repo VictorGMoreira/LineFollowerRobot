@@ -1,0 +1,19 @@
+STM32 Pin,Package Pin (UFQFPN48),Function,Peripheral / Config,Connects To,Notes
+PA0,10,Line sensor S0,ADC1_IN0 rank 1 (DMA2_Stream0 circular),Sensor bar ch0 (edge),weight 0
+PA1,11,Line sensor S1,ADC1_IN1 rank 2,Sensor bar ch1,weight 1000
+PA2,12,Line sensor S2,ADC1_IN2 rank 3,Sensor bar ch2,weight 2000
+PA3,13,Line sensor S3,ADC1_IN3 rank 4,Sensor bar ch3,weight 3000
+PA4,14,Line sensor S4,ADC1_IN4 rank 5,Sensor bar ch4,weight 4000
+PA5,15,Line sensor S5,ADC1_IN5 rank 6,Sensor bar ch5,weight 5000
+PA6,16,Line sensor S6,ADC1_IN6 rank 7,Sensor bar ch6,weight 6000
+PA7,17,Line sensor S7,ADC1_IN7 rank 8,Sensor bar ch7 (edge),weight 7000
+PB3,39,Motor 1 RIGHT PWM,TIM2_CH2 AF1 PWM1 20 kHz,Motor driver PWM A,duty 0..4199
+PB2,20,Motor 1 RIGHT DIR,GPIO output PP (MOTOR1_DIR),Motor driver DIR A,LOW=forward HIGH=reverse; also BOOT1
+PB5,41,Motor 2 LEFT PWM,TIM3_CH2 AF2 PWM1 20 kHz,Motor driver PWM B,duty 0..4199
+PB4,40,Motor 2 LEFT DIR,GPIO output PP (MOTOR2_DIR),Motor driver DIR B,LOW=forward HIGH=reverse
+PA9,30,UART TX to ESP32 (NEW),USART1_TX AF7 115200 8N1,ESP32-C3 GPIO6 (RX),comm.c
+PA10,31,UART RX from ESP32 (NEW),USART1_RX AF7 pull-up 115200 8N1,ESP32-C3 GPIO7 (TX),comm.c
+PA13,34,SWDIO,Debug,ST-Link,keep free
+PA14,37,SWCLK,Debug,ST-Link,keep free
+GND,-,Ground,-,ESP32 GND + driver GND + sensors GND,must be common
+(internal),-,Control loop tick,TIM4 PSC 83 ARR 1999 -> 500 Hz,-,2 ms per PID step
