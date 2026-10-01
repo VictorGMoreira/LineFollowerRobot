@@ -1,0 +1,114 @@
+#ifndef CONTROL_H
+#define CONTROL_H
+
+#include "main.h"
+#include "robot_config.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+//Sensoriamento
+#define SENSOR_COUNT        8
+
+// Placeholder de calibração( PQ não tem como eu fazer a calibracao de casa ne)
+// Tem que trocar pelos valores certos
+#define SENSOR_MIN_DEFAULT  400
+#define SENSOR_MAX_DEFAULT  3600
+
+// 0 = linha da valor ALTO no ADC (padrao). Se na pagina do ESP as barras
+// DESCEREM em cima da linha, troque para 1.
+#define SENSOR_INVERT        0
+
+// 0 = S0 (PA0) fica do lado DIREITO do robo (olhando de tras, no sentido de andar).
+// 1 = S0 fica do lado ESQUERDO. Teste: robo parado com a linha sob o lado direito
+// da barra -> SENS tem que dar POS perto de 0. Se der perto de 7000, troque.
+// Muda so o calculo da posicao; o SENS continua listando R/N na ordem dos pinos.
+#define SENSOR_ORDEM_INVERTIDA  0
+
+// Valores calibrados abaixo disso contam como 0 na media (ruido do branco)
+#define SENSOR_NOISE_FLOOR   50
+
+// Faixa minima (max - min) aceita na calibracao; abaixo disso o sensor
+// mantem a calibracao anterior
+#define CAL_MIN_RANGE        200
+
+#define POSITION_CENTER     3500
+#define PWM_MAX_DUTY         4199
+#define BASE_SPEED_DUTY      2500
+
+
+//PID
+
+typedef struct {
+    float Kp;
+    float Ki;
+    float Kd;
+
+    float integral;
+    float integral_max;     // limite do termo I em unidades de duty (|Ki*integral| <= integral_max)
+    float prev_error;
+
+    float output;
+} PID_t;
+
+// Estados do robo (compartilhado com main.c e comm.c)
+typedef enum {
+    STATE_INIT,
+    STATE_SEGUINDO_LINHA,
+    STATE_LINHA_PERDIDA,
+    STATE_PARADO_SEGURANCA,
+    STATE_PARADO,           // parado por comando (STOP)
+    STATE_TESTE_MOTOR,      // teste de motor por tempo (MOTOR l r ms)
+    STATE_CALIBRANDO        // coletando min/max dos sensores (CAL START)
+} RobotState_t;
+
+extern volatile uint16_t line_sensor_raw[SENSOR_COUNT];
+extern volatile RobotState_t robot_state;
+extern PID_t pid;
+extern int32_t vel_base;            // [U] velocidade base, ajustavel via serial (SPEED)
+
+void Control_Init(PID_t *pid, float kp, float ki, float kd, float integral_max);
+
+// Posicao 0..7000 da linha. Retorna false (e posicao = centro) se todos os
+// sensores calibrados estao abaixo de LIMIAR_LINHA.
+bool LineSensor_GetPosition(int32_t *position_out);
+
+// Erro para o PID (POSITION_CENTER - posicao), com memoria para linha perdida:
+// usa o ultimo erro valido, ou +-ERRO_MAX se ele passava de MARGEM_LADO.
+// Ao reencontrar a linha faz pid->prev_error = erro (sem pico no derivativo).
+int32_t Linha_Erro(PID_t *pid, bool *visivel);
+
+// Erro que seria usado agora se a linha estiver perdida (so leitura, para o SENS)
+int32_t Linha_ErroPerdida(void);
+
+// Valor calibrado de um sensor: 0 (fundo) .. 1000 (linha)
+int32_t LineSensor_Normalize(int i, int32_t raw);
+
+// Esquece o ultimo erro valido (chamado no RUN)
+void LineSensor_ResetMemory(void);
+
+float PID_Step(PID_t *pid, int32_t error);
+
+// Mistura: roda de fora = vel_base, roda de dentro = vel_base - 2*|c| (>= -REV_MAX),
+// depois a rampa (SLEW_MAX) e a compensacao de zona morta
+void Motors_ApplyPID(float pid_output, int32_t erro);
+
+// Zera a rampa (as duas rodas partem de 0). Chamar ao entrar em seguir linha.
+void Motors_ResetRampa(void);
+
+// Comando com sinal na escala U (-U_MAX..U_MAX), com compensacao de zona morta
+void Motors_Set(int32_t u_esq, int32_t u_dir);
+// Freio (os dois pinos de cada motor em HIGH)
+void Motors_Stop(void);
+
+void PID_Reset(PID_t *pid);
+
+// Calibracao dos sensores: reset -> amostra varias vezes passando o robo sobre a linha -> finish
+void LineSensor_CalibReset(void);
+void LineSensor_CalibSample(void);
+// Sensores com faixa < CAL_MIN_RANGE voltam para a calibracao anterior.
+// Retorna mascara de bits dos sensores rejeitados (bit i = sensor i).
+uint8_t LineSensor_CalibFinish(void);
+int32_t LineSensor_GetMin(int i);
+int32_t LineSensor_GetMax(int i);
+
+#endif
