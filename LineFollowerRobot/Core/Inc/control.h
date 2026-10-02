@@ -88,8 +88,8 @@ void LineSensor_ResetMemory(void);
 
 float PID_Step(PID_t *pid, int32_t error);
 
-// Mistura: roda de fora = vel_base, roda de dentro = vel_base - 2*|c| (>= -REV_MAX),
-// depois a rampa (SLEW_MAX) e a compensacao de zona morta
+// Mistura: roda de fora = vel_base, roda de dentro = vel_base - 2*|c| (>= 0, sem re),
+// depois a rampa (SLEW_SUBIDA/SLEW_DESCIDA) e a compensacao de zona morta
 void Motors_ApplyPID(float pid_output, int32_t erro);
 
 // Zera a rampa (as duas rodas partem de 0). Chamar ao entrar em seguir linha.

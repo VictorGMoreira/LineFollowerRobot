@@ -179,25 +179,18 @@ void Motors_ResetRampa(void)
     rampa_dir = 0;
 }
 
-// Reduzir a forca: imediato. Aumentar: no maximo SLEW_MAX por tick.
-// Inverter o sentido: vai a 0 na hora e sobe no sentido novo com o limite.
+// Comandos sempre >= 0. Aumentar: no maximo SLEW_SUBIDA por tick.
+// Reduzir: no maximo SLEW_DESCIDA por tick. Limite <= 0 = sem rampa naquele sentido.
 static int32_t rampa(int32_t atual, int32_t alvo)
 {
-    if (SLEW_MAX <= 0) {
-        return alvo;
+    int32_t delta = alvo - atual;
+    if (SLEW_SUBIDA > 0 && delta > SLEW_SUBIDA) {
+        return atual + SLEW_SUBIDA;
     }
-    if ((atual > 0 && alvo < 0) || (atual < 0 && alvo > 0)) {
-        atual = 0;
+    if (SLEW_DESCIDA > 0 && delta < -SLEW_DESCIDA) {
+        return atual - SLEW_DESCIDA;
     }
-    int32_t mag_atual = (atual < 0) ? -atual : atual;
-    int32_t mag_alvo  = (alvo < 0) ? -alvo : alvo;
-    if (mag_alvo <= mag_atual) {
-        return alvo;
-    }
-    if (mag_alvo - mag_atual <= SLEW_MAX) {
-        return alvo;
-    }
-    return (alvo > 0) ? mag_atual + SLEW_MAX : -(mag_atual + SLEW_MAX);
+    return alvo;
 }
 
 void Motors_ApplyPID(float pid_output, int32_t erro)
@@ -214,16 +207,16 @@ void Motors_ApplyPID(float pid_output, int32_t erro)
         vb = (reduzida < piso) ? piso : reduzida;
     }
 
-    // Roda de fora nunca passa de vel_base; a diferenca entre as rodas continua 2*c
+    // Roda de fora nunca passa de vel_base; roda de dentro desacelera ate 0, sem re
     float fora   = vb;
     float dentro = vb - 2.0f * c_abs;
-    if (dentro < -(float)REV_MAX) {
-        dentro = -(float)REV_MAX;
+    if (dentro < 0.0f) {
+        dentro = 0.0f;
     }
 
-    // c > 0 equivale ao antigo "esq = base + c": esquerda e a roda de fora
-    int32_t alvo_esq = (c >= 0.0f) ? (int32_t)fora : (int32_t)dentro;
-    int32_t alvo_dir = (c >= 0.0f) ? (int32_t)dentro : (int32_t)fora;
+    // c > 0: direita e a roda de fora (sentido invertido no teste do robo)
+    int32_t alvo_esq = (c >= 0.0f) ? (int32_t)dentro : (int32_t)fora;
+    int32_t alvo_dir = (c >= 0.0f) ? (int32_t)fora : (int32_t)dentro;
 
     rampa_esq = rampa(rampa_esq, alvo_esq);
     rampa_dir = rampa(rampa_dir, alvo_dir);

@@ -64,8 +64,7 @@
 /* ------------------------------------------------------------------ */
 /* Mistura das rodas (curva nunca mais rapida que a reta)              */
 /* ------------------------------------------------------------------ */
-/* Roda de fora = vel_base; roda de dentro = vel_base - 2*|c|, limitada a -REV_MAX. */
-#define REV_MAX             600     /* [U] re maxima da roda de dentro (60% de U_MAX) */
+/* Roda de fora = vel_base; roda de dentro = vel_base - 2*|c|, limitada a 0 (nunca da re). */
 
 /* Opcional: vel_base_efetiva = vel_base - K_REDUCAO_CURVA * |erro|, com piso VEL_MIN_CURVA.
  * 0 = desligado. Ex.: 0.1 -> com erro 3500 reduz 350 U. */
@@ -75,12 +74,13 @@
 /* ------------------------------------------------------------------ */
 /* Rampa (limite de variacao do comando)                               */
 /* ------------------------------------------------------------------ */
-/* Enquanto segue a linha, cada roda so pode AUMENTAR a forca em no maximo SLEW_MAX
- * por tick (2 ms). Reduzir a forca e imediato. Na inversao de sentido o comando vai
- * direto a 0 (freio) e sobe no sentido novo com o mesmo limite.
+/* Enquanto segue a linha, o comando de cada roda (sempre >= 0) varia no maximo
+ * SLEW_SUBIDA por tick (2 ms) ao acelerar e SLEW_DESCIDA ao desacelerar. Filtra o
+ * ruido do PID (tremedeira). Descida mais rapida que a subida para nao atrasar a curva.
  * Aplicado antes da compensacao de zona morta. STOP, freio e teste MOTOR nao passam por aqui.
- * 150 -> 0 a 100% em ~14 ms. 0 = desligado. */
-#define SLEW_MAX            150     /* [U por tick de 2 ms] */
+ * 40 -> 0 a 100% em 50 ms; 60 -> 100% a 0 em ~34 ms. 0 = sem rampa naquele sentido. */
+#define SLEW_SUBIDA         40      /* [U por tick de 2 ms] */
+#define SLEW_DESCIDA        60      /* [U por tick de 2 ms] */
 
 /* ------------------------------------------------------------------ */
 /* Linha perdida                                                       */

@@ -28,7 +28,7 @@ MCU: **STM32F401CCU6** (UFQFPN48, "Black Pill"), SYSCLK 84 MHz (HSI + PLL), APB1
 
 Internal (no pin): **TIM4** runs the control loop tick at 84 MHz / 84 / 2000 = **500 Hz (2 ms)**. ADC1 is 12-bit, scans 8 channels continuously, and DMA2_Stream0 copies them in circular mode into `line_sensor_raw[8]`.
 
-Position = weighted average of the normalized sensors, 0..7000, **center = 3500**. `error = 3500 − position`. Motor commands are in the U scale, −1000..1000 (see `Core/Inc/robot_config.h`): outer wheel = base speed, inner wheel = base − 2·|PID|, down to −`REV_MAX` (reverse).
+Position = weighted average of the normalized sensors, 0..7000, **center = 3500**. `error = 3500 − position`. Motor commands are in the U scale, −1000..1000 (see `Core/Inc/robot_config.h`): outer wheel = base speed, inner wheel = base − 2·|PID|, clamped at 0 (never reverses), then slew-limited (`SLEW_SUBIDA`/`SLEW_DESCIDA`).
 
 ## ESP32-C3 ↔ STM32 wiring
 
