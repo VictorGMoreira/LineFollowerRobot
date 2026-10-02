@@ -76,11 +76,11 @@
 /* ------------------------------------------------------------------ */
 /* Enquanto segue a linha, o comando de cada roda (sempre >= 0) varia no maximo
  * SLEW_SUBIDA por tick (2 ms) ao acelerar e SLEW_DESCIDA ao desacelerar. Filtra o
- * ruido do PID (tremedeira). Descida mais rapida que a subida para nao atrasar a curva.
+ * ruido do PID (tremedeira).
  * Aplicado antes da compensacao de zona morta. STOP, freio e teste MOTOR nao passam por aqui.
- * 40 -> 0 a 100% em 50 ms; 60 -> 100% a 0 em ~34 ms. 0 = sem rampa naquele sentido. */
-#define SLEW_SUBIDA         40      /* [U por tick de 2 ms] */
-#define SLEW_DESCIDA        60      /* [U por tick de 2 ms] */
+ * 400 -> 0 a 100% (e 100% a 0) em 5 ms. 0 = sem rampa naquele sentido. */
+#define SLEW_SUBIDA         400     /* [U por tick de 2 ms] */
+#define SLEW_DESCIDA        400     /* [U por tick de 2 ms] */
 
 /* ------------------------------------------------------------------ */
 /* Linha perdida                                                       */
