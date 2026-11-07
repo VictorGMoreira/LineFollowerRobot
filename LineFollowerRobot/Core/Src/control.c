@@ -52,6 +52,9 @@ void Control_Init(PID_t *pid, float kp, float ki, float kd, float integral_max)
 
 int32_t LineSensor_Normalize(int i, int32_t raw)
 {
+    if (SENSOR_IGNORAR_MASK & (1u << i)) {
+        return 0;       // sensor com defeito: nunca "ve" linha
+    }
     int32_t range = sensor_max[i] - sensor_min[i];
     if (range <= 0) {
         return 0;
@@ -253,7 +256,8 @@ uint8_t LineSensor_CalibFinish(void)
 {
     uint8_t rejected = 0;
     for (int i = 0; i < SENSOR_COUNT; i++) {
-        if (sensor_max[i] - sensor_min[i] < CAL_MIN_RANGE) {
+        if (sensor_max[i] - sensor_min[i] < CAL_MIN_RANGE &&
+            !(SENSOR_IGNORAR_MASK & (1u << i))) {
             sensor_min[i] = backup_min[i];
             sensor_max[i] = backup_max[i];
             rejected |= (uint8_t)(1u << i);

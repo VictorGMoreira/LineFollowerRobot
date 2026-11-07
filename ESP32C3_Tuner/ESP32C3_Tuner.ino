@@ -1,10 +1,12 @@
 /*
  * ESP32-C3 <-> STM32F401 (LineFollowerRobot) - ponte de calibracao
  *
- * - Cria uma rede Wi-Fi (AP) com uma pagina de calibracao: PID, velocidade base,
- *   STOP, RUN, teste de motores, leitura/calibracao dos sensores.
+ * - Cria uma rede Wi-Fi (AP) com uma pagina de calibracao em http://192.168.4.1: PID,
+ *   velocidade base, STOP, RUN, teste de motores, leitura/calibracao dos sensores.
  * - Tambem repassa o Serial USB: digite comandos no Serial Monitor (115200, "Newline")
  *   e eles vao direto pro STM32. Tudo que o STM32 manda aparece no Serial Monitor.
+ * - Heartbeat: a cada HB_ESP_MS o ESP manda "ESP OK up <s> stm <ok|sem resposta> ..." no
+ *   Serial USB, pisca o LED e a pagina mostra o estado no topo.
  *
  * Ligacao (3.3 V dos dois lados, pode ligar direto):
  *   ESP32-C3 GPIO7 (TX)  ->  STM32 PA10 (USART1_RX)
@@ -39,6 +41,10 @@ const char *AP_PASS = "seguidor123";   // minimo 8 caracteres
 #define WEB_HB_TIMEOUT_MS  2500
 #define STM_HB_PERIOD_MS   300
 #define STM_WD_MS          1000
+
+#define HB_ESP_MS          2000    // heartbeat do ESP (Serial USB + LED + pagina)
+#define LED_PIN            8       // LED da placa (Super Mini: GPIO8, acende em LOW). -1 = sem LED
+#define LED_ON_LEVEL       LOW
 // ----------------------------------------------
 
 HardwareSerial &Stm = Serial1;
@@ -59,6 +65,11 @@ uint32_t lastStmHb = 0;
 String stmLine;   // linha sendo montada vinda do STM32
 String usbLine;   // linha sendo montada vinda do Serial USB
 
+bool quiet = false;        // heartbeat: nao loga o PING/PONG
+uint32_t lastEspHb = 0;
+bool stmOk = false;
+bool ledState = false;
+
 void addLog(const String &s) {
   logBuf[logHead] = s;
   logHead = (logHead + 1) % LOG_LINES;
@@ -69,6 +80,7 @@ void restoreSaved();
 
 // Trata uma linha completa vinda do STM32
 void onStmLine(const String &line) {
+  if (quiet) return;
   Serial.print("< ");
   Serial.println(line);
   addLog("< " + line);
@@ -98,6 +110,7 @@ String pollStm() {
 void sendRaw(const String &cmd) {
   Stm.print(cmd);
   Stm.print('\n');
+  if (quiet) return;
   Serial.print("> ");
   Serial.println(cmd);
   addLog("> " + cmd);
@@ -118,7 +131,7 @@ String sendCmd(const String &cmd, uint32_t timeoutMs = REPLY_TIMEOUT_MS) {
     }
     delay(1);
   }
-  addLog("! sem resposta: " + cmd);
+  if (!quiet) addLog("! sem resposta: " + cmd);
   return "TIMEOUT";
 }
 
@@ -131,6 +144,7 @@ void restoreSaved() {
   int speed = prefs.getInt("speed", 595);
   if (speed > 1000) speed = speed * 1000 / 4199;   // valor salvo na escala antiga (duty 0..4199)
   sendRaw("SPEED " + String(speed));
+  if (prefs.isKey("dzl")) sendRaw("DZ " + String(prefs.getInt("dzl")) + " " + String(prefs.getInt("dzr")));
 }
 
 // ---------------- Pagina web ----------------
@@ -162,11 +176,24 @@ table{border-collapse:collapse;font-family:monospace;font-size:12px;width:100%}
 td,th{border:1px solid #333;padding:3px;text-align:center}
 .lost{color:#f55;font-weight:bold}
 label{font-size:13px;color:#aaa}
+select{padding:8px;font-size:16px;background:#222;color:#fff;border:1px solid #444;border-radius:6px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0}
+.ok{color:#2c5;font-weight:bold}
+#dzgo.armed{background:#e80;font-weight:bold}
+#esp{font-family:monospace;font-size:13px;margin-bottom:8px}
+#espdot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#555;margin-right:6px}
 </style></head><body>
+<div id="esp"><span id="espdot"></span><span id="esptxt">ESP: aguardando...</span></div>
 <button id="stop" onclick="cmd('STOP')">STOP</button>
 <button id="run" onclick="cmd('RUN')">RUN (seguir linha)</button>
 <div class="row"><label style="color:#eee"><input type="checkbox" id="hb" checked>Parar o robo se esta pagina desconectar</label></div>
 <div id="reply">-</div>
+
+<h2>Ligacao ESP &lt;-&gt; STM32</h2>
+<div class="row">
+ <button onclick="testLink()">Testar ligacao</button>
+ <span id="link">-</span>
+</div>
 
 <h2>PID</h2>
 <div class="row">
@@ -198,18 +225,51 @@ label{font-size:13px;color:#aaa}
  <button class="gray" onclick="motor(0,v('mr'))">So direito</button>
  <button class="gray" onclick="motor(-v('ml'),-v('mr'))">Reverso</button>
 </div>
+<label>Teste rapido de cada roda (rodas no ar, forca do campo "Esq %"):</label>
+<div class="grid">
+ <button onclick="motor(Math.abs(v('ml')),0)">Esq frente</button>
+ <button onclick="motor(-Math.abs(v('ml')),0)">Esq re</button>
+ <button onclick="motor(0,Math.abs(v('ml')))">Dir frente</button>
+ <button onclick="motor(0,-Math.abs(v('ml')))">Dir re</button>
+</div>
+<label>"Frente" tem que girar a roda para a frente do robo. Girou ao contrario: troque MOTOR_ESQ_INVERTIDO / MOTOR_DIR_INVERTIDO
+em robot_config.h (ou inverta os fios do motor). Girou a roda do outro lado: troque os motores entre OUT1/OUT2 e OUT3/OUT4.
+Nao girou: confira EEP no 3V3, VCC na bateria e GND comum.</label>
+
+<h2>Zona morta (robo no chao)</h2>
+<div class="row">
+ <select id="dzside"><option value="l">Esquerdo</option><option value="r">Direito</option><option value="b">Os dois</option></select>
+ <button onclick="dzStart()">Iniciar rampa</button>
+ <button id="dzgo" class="gray" onclick="dzGot()">GIROU!</button>
+</div>
+<div class="row"><span id="dzres">-</span></div>
+<div class="row">
+ <label>DZ Esq</label><input id="dzl" type="number" min="0" max="900">
+ <label>DZ Dir</label><input id="dzr" type="number" min="0" max="900">
+ <button onclick="dzSend()">Enviar DZ</button>
+ <button class="gray" onclick="dzRead()">Ler do robo</button>
+</div>
+<label>A forca sobe sozinha, sem compensacao (MOTORRAW). Aperte GIROU! no instante em que o robo comecar a andar:
+o valor vai para o campo DZ daquele lado. Depois "Enviar DZ" (0..900, 1000 = 100%) e "Salvar no ESP" (secao PID) para
+nao perder ao reiniciar. Para ficar fixo no firmware: DZ_ESQ / DZ_DIR no robot_config.h.</label>
 
 <h2>Sensores (valor calibrado 0..1000)</h2>
 <div class="bars" id="bars"></div>
 <div class="rawrow" id="rawrow"></div>
+<div class="rawrow" id="pinrow"></div>
+<div class="rawrow" id="okrow"></div>
 <div class="track"><div class="mid"></div><div id="mark"></div></div>
 <div class="row"><span id="pos">POS -</span></div>
+<div class="row"><span id="top">-</span></div>
+<label>Teste de fiacao: ligue "Ao vivo" e passe a linha devagar embaixo de cada sensor. Cada um tem que ficar com OK
+(faixa bruta &gt; 800) e o "mais forte" tem que andar em ordem S0..S7. Fora de ordem = fios OUT trocados.</label>
 <div class="row">
  <button class="gray" onclick="sens()">Ler</button>
  <button class="gray" id="live" onclick="toggleLive()">Ao vivo: OFF</button>
  <button onclick="cmd('CAL START')">Calibrar: iniciar</button>
  <button onclick="calStop()">Calibrar: terminar</button>
  <button class="gray" onclick="calRead()">Ver calibracao</button>
+ <button class="gray" onclick="resetWire()">Zerar teste de fiacao</button>
 </div>
 <table id="caltab"></table>
 <label>Calibrar: iniciar, arrastar o robo devagar sobre a linha (todos os sensores veem preto e branco), terminar.</label>
@@ -225,11 +285,48 @@ function v(id){return document.getElementById(id).value.trim()}
 function pct2duty(p){return Math.round(Math.max(-100,Math.min(100,+p||0))*MAX/100)}
 async function cmd(c){
   if(!c)return '';
+  if(c.toUpperCase()==='STOP') dzRun=false;     // STOP tambem interrompe a rampa de zona morta
   const r=await fetch('/cmd?c='+encodeURIComponent(c),{cache:'no-store'}).then(r=>r.text()).catch(e=>'ERRO '+e);
   document.getElementById('reply').textContent=c+'  ->  '+r;
   return r;
 }
 function motor(l,r){cmd('MOTOR '+pct2duty(l)+' '+pct2duty(r)+' '+(parseInt(v('mt'))||1000))}
+async function testLink(){
+  const el=document.getElementById('link'), t0=performance.now();
+  const r=await cmd('PING'), ms=Math.round(performance.now()-t0);
+  if(r!=='PONG'){el.innerHTML='<span class="lost">SEM RESPOSTA: confira GPIO7-&gt;PA10, GPIO6&lt;-PA9, GND e se o STM32 esta ligado</span>';return}
+  const s=(await cmd('STATUS')).split(' ');
+  el.innerHTML='<span class="ok">OK</span> ('+ms+' ms)  estado: '+(s[0]==='STATUS'?s[1]:'?');
+}
+// Rampa de zona morta: MOTORRAW sobe DZ_STEP a cada DZ_MS ate apertar GIROU! ou STOP
+const DZ_STEP=10, DZ_MS=300;
+let dzRun=false, dzU=0;
+async function dzStart(){
+  if(dzRun)return;
+  dzRun=true; dzU=0;
+  const side=v('dzside'), go=document.getElementById('dzgo'), res=document.getElementById('dzres');
+  go.classList.add('armed');
+  while(dzRun&&dzU<=MAX){
+    const l=side!=='r'?dzU:0, r=side!=='l'?dzU:0;
+    await cmd('MOTORRAW '+l+' '+r+' '+(DZ_MS*3));    // dura mais que um passo: sem tranco entre passos
+    res.textContent='u = '+dzU+' ('+Math.round(dzU*100/MAX)+'%)';
+    await new Promise(r=>setTimeout(r,DZ_MS));
+    if(dzRun) dzU+=DZ_STEP;
+  }
+  go.classList.remove('armed');
+  if(dzU>MAX){cmd('STOP');res.innerHTML='<span class="lost">Chegou a 100% sem apertar GIROU! - confira o motor</span>'}
+}
+function dzGot(){
+  if(!dzRun)return;
+  dzRun=false; cmd('STOP');
+  const side=v('dzside'), name=side==='l'?'DZ Esq':side==='r'?'DZ Dir':'DZ Esq e Dir';
+  if(side!=='r') dzl.value=dzU;
+  if(side!=='l') dzr.value=dzU;
+  document.getElementById('dzres').innerHTML='<span class="ok">'+name+' = '+dzU+'</span>  (aperte "Enviar DZ")';
+}
+function showDz(r){const t=r.split(' '), i=t.indexOf('DZ'); if(i<0)return; dzl.value=+t[i+1]; dzr.value=+t[i+2]}
+async function dzSend(){showDz(await cmd('DZ '+v('dzl')+' '+v('dzr')))}
+async function dzRead(){showDz(await cmd('DZ?'))}
 async function status(){
   const r=await cmd('STATUS'); const t=r.split(' ');
   const g=k=>{const i=t.indexOf(k);return i>=0?t[i+1]:''};
@@ -238,11 +335,22 @@ async function status(){
   spd.value=Math.round(+g('SPEED')*100/MAX);
 }
 async function save(){
-  const r=await fetch('/save?kp='+v('kp')+'&ki='+v('ki')+'&kd='+v('kd')+'&speed='+pct2duty(v('spd'))).then(r=>r.text());
+  const r=await fetch('/save?kp='+v('kp')+'&ki='+v('ki')+'&kd='+v('kd')+'&speed='+pct2duty(v('spd'))+
+    '&dzl='+v('dzl')+'&dzr='+v('dzr')).then(r=>r.text());
   document.getElementById('reply').textContent=r;
 }
 const bars=document.getElementById('bars'), rawrow=document.getElementById('rawrow');
-for(let i=0;i<8;i++){bars.innerHTML+='<div class="bar" id="b'+i+'"><span></span></div>';rawrow.innerHTML+='<div id="r'+i+'">-</div>'}
+const PINS=['PA1','PA2','PA3','PA4','PA5','PA6','PA7','PB0'];   // QTR-8A OUT1..OUT8
+const pinrow=document.getElementById('pinrow'), okrow=document.getElementById('okrow');
+for(let i=0;i<8;i++){
+  bars.innerHTML+='<div class="bar" id="b'+i+'"><span></span></div>';rawrow.innerHTML+='<div id="r'+i+'">-</div>';
+  pinrow.innerHTML+='<div>S'+i+'<br>'+PINS[i]+'</div>';okrow.innerHTML+='<div id="ok'+i+'">-</div>';
+}
+// Teste de fiacao: min/max bruto visto em cada sensor desde o ultimo "Zerar"
+const WIRE_OK=800;
+let rmin=[], rmax=[];
+function resetWire(){rmin=Array(8).fill(4095);rmax=Array(8).fill(0);for(let i=0;i<8;i++){const o=document.getElementById('ok'+i);o.textContent='-';o.className=''}}
+resetWire();
 // resposta: SENS R r0..r7 N n0..n7 POS p LINE 0|1
 async function sens(){
   const r=await fetch('/cmd?c=SENS&t='+Date.now(),{cache:'no-store'}).then(r=>r.text()).catch(()=>'');
@@ -253,7 +361,13 @@ async function sens(){
     b.style.height=(n/10)+'%'; b.firstChild.textContent=n;
     b.style.background=n>200?'#39f':'#246';        // >200 = sensor ve linha (LINE_DETECT_THRESHOLD)
     document.getElementById('r'+i).textContent=raw;
+    rmin[i]=Math.min(rmin[i],raw); rmax[i]=Math.max(rmax[i],raw);
+    const ok=document.getElementById('ok'+i);
+    if(rmax[i]-rmin[i]>WIRE_OK){ok.textContent='OK';ok.className='ok'}else{ok.textContent=rmax[i]-rmin[i];ok.className=''}
   }
+  let top=0; for(let i=1;i<8;i++) if(+t[iN+1+i]>+t[iN+1+top]) top=i;
+  document.getElementById('top').textContent=+t[iN+1+top]>200
+    ? 'Mais forte: S'+top+' (QTR OUT'+(top+1)+', '+PINS[top]+')' : 'Nenhum sensor vendo linha';
   const pos=+t[iP+1], seen=t[iL+1]==='1';
   const m=document.getElementById('mark'); m.style.left=(pos/7000*100)+'%'; m.style.background=seen?'#2c5':'#f55';
   const el=document.getElementById('pos');
@@ -293,15 +407,18 @@ function toggleLive(){
   live=!live; if(live) liveLoop();
   document.getElementById('live').textContent='Ao vivo: '+(live?'ON':'OFF');
 }
-let seq=-1;
+let seq=-1, blink=false;
 async function pollLog(){
-  const r=await fetch('/log?since='+seq).then(r=>r.json()).catch(()=>null);
-  if(r&&r.seq!==seq){seq=r.seq;const el=document.getElementById('log');el.textContent=r.lines.join('\n');el.scrollTop=1e9}
+  const r=await fetch('/log?since='+seq,{cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+  const dot=document.getElementById('espdot'), et=document.getElementById('esptxt');
+  if(!r){dot.style.background='#f55';et.innerHTML='<span class="lost">ESP SEM CONEXAO</span>';return}
+  blink=!blink; dot.style.background=blink?'#2c5':'#164';
+  et.innerHTML='ESP: ok, ligado ha '+r.up+' s  |  STM32: '+(r.stm?'<span class="ok">ok</span>':'<span class="lost">sem resposta</span>');
+  if(r.seq!==seq){seq=r.seq;const el=document.getElementById('log');el.textContent=r.lines.join('\n');el.scrollTop=1e9}
 }
 setInterval(pollLog,700);
 document.addEventListener('keydown',e=>{if(e.code==='Space'&&e.target.tagName!=='INPUT'){e.preventDefault();cmd('STOP')}});
-status();
-calRead();
+(async()=>{await status(); await dzRead(); await calRead();})();
 </script></body></html>
 )HTML";
 
@@ -315,6 +432,7 @@ String jsonEscape(const String &s) {
 }
 
 void handleRoot() { server.send_P(200, "text/html", PAGE); }
+
 
 void handleCmd() {
   String c = server.arg("c");
@@ -340,16 +458,19 @@ bool argNumber(const char *name, float lo, float hi, float &out) {
 }
 
 void handleSave() {
-  float kp, ki, kd, speed;
+  float kp, ki, kd, speed, dzl, dzr;
   if (!argNumber("kp", -10000, 10000, kp) || !argNumber("ki", -10000, 10000, ki) ||
-      !argNumber("kd", -10000, 10000, kd) || !argNumber("speed", 1, 1000, speed)) {
-    server.send(400, "text/plain", "ERR nao salvo: preencha Kp, Ki, Kd e velocidade (1..100%) com numeros validos");
+      !argNumber("kd", -10000, 10000, kd) || !argNumber("speed", 1, 1000, speed) ||
+      !argNumber("dzl", 0, 900, dzl) || !argNumber("dzr", 0, 900, dzr)) {
+    server.send(400, "text/plain", "ERR nao salvo: preencha Kp, Ki, Kd, velocidade (1..100%) e DZ Esq/Dir (0..900) com numeros validos");
     return;
   }
   prefs.putFloat("kp", kp);
   prefs.putFloat("ki", ki);
   prefs.putFloat("kd", kd);
   prefs.putInt("speed", (int)speed);
+  prefs.putInt("dzl", (int)dzl);
+  prefs.putInt("dzr", (int)dzr);
   server.send(200, "text/plain", "Salvo no ESP (sera reenviado quando o STM32 reiniciar)");
 }
 
@@ -367,7 +488,8 @@ void handleHb() {
 }
 
 void handleLog() {
-  String out = "{\"seq\":" + String(logSeq) + ",\"lines\":[";
+  String out = "{\"seq\":" + String(logSeq) + ",\"up\":" + String(millis() / 1000) +
+               ",\"stm\":" + (stmOk ? "1" : "0") + ",\"lines\":[";
   bool first = true;
   for (int i = 0; i < LOG_LINES; i++) {
     const String &l = logBuf[(logHead + i) % LOG_LINES];
@@ -386,9 +508,11 @@ void setup() {
   Serial.begin(115200);
   Stm.begin(STM_BAUD, SERIAL_8N1, STM_RX_PIN, STM_TX_PIN);
   prefs.begin("lftuner", false);
+  if (LED_PIN >= 0) pinMode(LED_PIN, OUTPUT);
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASS);
+  WiFi.setSleep(false);              // sem economia de energia: resposta rapida (STOP, heartbeat)
 
   server.on("/", handleRoot);
   server.on("/cmd", handleCmd);
@@ -406,14 +530,15 @@ void setup() {
   Serial.print(AP_PASS);
   Serial.print("  -> abra http://");
   Serial.println(WiFi.softAPIP());
-  Serial.println("Ou digite comandos aqui (PING, STATUS, STOP, RUN, PID kp ki kd, MOTOR l r ms, SENS, CAL START/STOP)");
+  Serial.println("Ou digite comandos aqui (PING, STATUS, STOP, RUN, PID kp ki kd, MOTOR l r ms, MOTORRAW l r ms, DZ esq dir, SENS, CAL START/STOP)");
 
-  sendCmd("PING");
+  stmOk = sendCmd("PING") == "PONG";
   sendCmd("WD 0");   // watchdog do STM32 so liga quando a pagina pedir (checkbox)
 }
 
 void loop() {
   server.handleClient();
+
 
   // Linhas espontaneas do STM32 (EVT, HELLO, respostas atrasadas)
   for (String l = pollStm(); l.length(); l = pollStm()) onStmLine(l);
@@ -435,6 +560,21 @@ void loop() {
     } else if (millis() - lastStmHb >= STM_HB_PERIOD_MS) {
       lastStmHb = millis();
       Stm.print("HB\n");          // silencioso: nao vai para o log
+    }
+  }
+
+  // Heartbeat do ESP: PING silencioso no STM32 + linha no Serial + pisca o LED
+  if (millis() - lastEspHb >= HB_ESP_MS) {
+    lastEspHb = millis();
+    quiet = true;
+    stmOk = sendCmd("PING", 50) == "PONG";
+    quiet = false;
+    String hb = "ESP OK up " + String(millis() / 1000) + "s stm " + (stmOk ? "ok" : "sem resposta") +
+                " wifi " + String(WiFi.softAPgetStationNum());
+    Serial.println(hb);
+    if (LED_PIN >= 0) {
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState ? LED_ON_LEVEL : !LED_ON_LEVEL);
     }
   }
 

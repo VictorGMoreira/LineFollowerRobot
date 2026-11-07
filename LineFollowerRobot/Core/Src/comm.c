@@ -21,6 +21,10 @@
  *   MOTOR <esq> <dir> <ms> -> OK MOTOR <esq> <dir> <ms>  (u -1000..1000, negativo = re, 0 = freio,
  *                                                          com compensacao de zona morta; ms 1..10000)
  *                           ... e ao terminar: EVT MOTOR DONE
+ *   MOTORRAW <esq> <dir> <ms> -> OK MOTORRAW ...         (igual ao MOTOR, SEM compensacao de zona
+ *                                                          morta: para medir DZ_ESQ/DZ_DIR)
+ *   DZ <esq> <dir>       -> OK DZ <esq> <dir>            (zona morta de cada motor, 0..DZ_LIMITE U)
+ *   DZ?                  -> DZ <esq> <dir>
  *   SENS                 -> SENS R <8 brutos 0..4095> N <8 calibrados 0..1000> POS <0..7000> LINE <1|0>
  *                           (LINE 0 = linha perdida; POS e a ponta do ultimo lado visto)
  *   CAL START            -> OK CAL START                 (motores parados, arraste o robo sobre a linha)
@@ -41,9 +45,10 @@
 #define TX_BUF_SIZE     512
 #define LINE_MAX        96
 #define MOTOR_TEST_MAX_MS   10000
-#define TICK_MS             2       // TIM4 a 500 Hz
+#define TICK_MS             2       // TIM2 a 500 Hz
 #define GAIN_LIMIT          10000.0f
 #define WD_MAX_MS           60000
+#define DZ_LIMITE           900     // [U] zona morta maxima aceita pelo comando DZ
 
 volatile uint32_t motor_test_ticks = 0;
 
@@ -85,7 +90,7 @@ void Comm_Init(void)
     USART1->BRR = (HAL_RCC_GetPCLK2Freq() + COMM_BAUDRATE / 2) / COMM_BAUDRATE;
     USART1->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE | USART_CR1_UE;
 
-    // Prioridade abaixo do TIM4 (0) para nao atrasar o tick de controle
+    // Prioridade abaixo do TIM2 (0) para nao atrasar o tick de controle
     HAL_NVIC_SetPriority(USART1_IRQn, 1, 0);
     HAL_NVIC_EnableIRQ(USART1_IRQn);
 
@@ -215,7 +220,8 @@ static void reply_cal(uint8_t rejected)
     bool weak = false;
     for (int i = 0; i < SENSOR_COUNT; i++) {
         n += snprintf(out + n, sizeof(out) - n, " %ld", (long)LineSensor_GetMax(i));
-        if (LineSensor_GetMax(i) - LineSensor_GetMin(i) < CAL_MIN_RANGE) weak = true;
+        if (LineSensor_GetMax(i) - LineSensor_GetMin(i) < CAL_MIN_RANGE &&
+            !(SENSOR_IGNORAR_MASK & (1u << i))) weak = true;
     }
     if (rejected) {
         n += snprintf(out + n, sizeof(out) - n, " REJ");
@@ -325,20 +331,41 @@ static void handle_line(char *line)
         snprintf(out, sizeof(out), "OK SPEED %ld", (long)v);
         Comm_SendLine(out);
     }
-    else if (strcmp(cmd, "MOTOR") == 0) {
+    else if (strcmp(cmd, "MOTOR") == 0 || strcmp(cmd, "MOTORRAW") == 0) {
+        bool bruto = (cmd[5] != '\0');      // MOTORRAW: sem compensacao de zona morta
         int32_t l, r, ms;
         if (!parse_int(a1, &l) || !parse_int(a2, &r) || !parse_int(a3, &ms) ||
             l < -U_MAX || l > U_MAX ||
             r < -U_MAX || r > U_MAX ||
             ms < 1 || ms > MOTOR_TEST_MAX_MS) {
-            Comm_SendLine("ERR MOTOR USE: MOTOR <-1000..1000> <-1000..1000> <1..10000 ms>");
+            Comm_SendLine(bruto ? "ERR MOTORRAW USE: MOTORRAW <-1000..1000> <-1000..1000> <1..10000 ms>"
+                                : "ERR MOTOR USE: MOTOR <-1000..1000> <-1000..1000> <1..10000 ms>");
             return;
         }
         robot_state = STATE_TESTE_MOTOR;
         motor_test_ticks = (uint32_t)((ms + TICK_MS - 1) / TICK_MS);
-        Motors_Set(l, r);
-        char out[48];
-        snprintf(out, sizeof(out), "OK MOTOR %ld %ld %ld", (long)l, (long)r, (long)ms);
+        if (bruto) {
+            Motor_ComandoBruto(l, r);
+        } else {
+            Motors_Set(l, r);
+        }
+        char out[56];
+        snprintf(out, sizeof(out), "OK %s %ld %ld %ld", cmd, (long)l, (long)r, (long)ms);
+        Comm_SendLine(out);
+    }
+    else if (strcmp(cmd, "DZ") == 0 || strcmp(cmd, "DZ?") == 0) {
+        int32_t l, r;
+        if (cmd[2] == '\0') {
+            if (!parse_int(a1, &l) || !parse_int(a2, &r) ||
+                l < 0 || l > DZ_LIMITE || r < 0 || r > DZ_LIMITE) {
+                Comm_SendLine("ERR DZ USE: DZ <0..900> <0..900>");
+                return;
+            }
+            Motor_SetDZ(l, r);
+        }
+        Motor_GetDZ(&l, &r);
+        char out[40];
+        snprintf(out, sizeof(out), "%s %ld %ld", cmd[2] == '\0' ? "OK DZ" : "DZ", (long)l, (long)r);
         Comm_SendLine(out);
     }
     else if (strcmp(cmd, "SENS") == 0) {

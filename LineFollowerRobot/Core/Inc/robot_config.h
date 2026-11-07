@@ -22,40 +22,37 @@
 #define VEL_BASE_PADRAO     595     /* [U] */
 
 /* ------------------------------------------------------------------ */
-/* Pinagem DRV8833 (1 pino PWM + 1 pino GPIO por motor)                */
+/* Pinagem DRV8833 (2 pinos PWM por motor, 20 kHz)                     */
 /* ------------------------------------------------------------------ */
-/* Lados conferidos no robo em 30/09 (teste MOTOR com rodas no ar). */
+/* ESQUERDO (OUT1/OUT2): IN1 = AIN1 = PB4 (TIM3_CH1)   IN2 = AIN2 = PB5 (TIM3_CH2) */
+#define MOTOR_ESQ_TIM       htim3
+#define MOTOR_ESQ_CANAL_A   TIM_CHANNEL_1
+#define MOTOR_ESQ_CANAL_B   TIM_CHANNEL_2
 
-/* ESQUERDO: IN3 = PB3 (TIM2_CH2, PWM)   IN4 = PB6 (GPIO_Output "MOTOR_DIR_R" no CubeMX)
- * Se o PB6 deixar de ser saida no CubeMX, o motor.c detecta, desliga a re e o freio
- * desse motor (0 vira "solto") e avisa pela UART.
- * (o label "MOTOR_DIR_R" do CubeMX ficou com R de antes; o motor e o esquerdo) */
-#define MOTOR_ESQ_TIM       htim2
-#define MOTOR_ESQ_CANAL     TIM_CHANNEL_2
-#define MOTOR_ESQ_DIR_PORT  MOTOR_DIR_R_GPIO_Port
-#define MOTOR_ESQ_DIR_PIN   MOTOR_DIR_R_Pin
-
-/* DIREITO: IN1 = PB5 (TIM3_CH2, PWM)   IN2 = PB4 (GPIO) */
-#define MOTOR_DIR_TIM       htim3
-#define MOTOR_DIR_CANAL     TIM_CHANNEL_2
-#define MOTOR_DIR_DIR_PORT  GPIOB
-#define MOTOR_DIR_DIR_PIN   GPIO_PIN_4
+/* DIREITO (OUT3/OUT4):  IN3 = BIN1 = PB6 (TIM4_CH1)   IN4 = BIN2 = PB7 (TIM4_CH2) */
+#define MOTOR_DIR_TIM       htim4
+#define MOTOR_DIR_CANAL_A   TIM_CHANNEL_1
+#define MOTOR_DIR_CANAL_B   TIM_CHANNEL_2
 
 /* Sentido de cada motor:
- *   0 = comando positivo usa GPIO LOW + PWM          -> frente em FAST decay, re em SLOW decay
- *   1 = comando positivo usa GPIO HIGH + PWM invertido -> frente em SLOW decay, re em FAST decay
- * Se uma roda girar ao contrario, troque o valor dela.
- * Para ter slow decay andando para frente: inverta os fios OUT do motor na DRV8833 e ponha 1. */
-#define MOTOR_ESQ_INVERTIDO 1
-#define MOTOR_DIR_INVERTIDO 1
+ *   0 = comando positivo aciona xIN1 (corrente OUT1 -> OUT2 / OUT3 -> OUT4)
+ *   1 = comando positivo aciona xIN2
+ * Se uma roda girar ao contrario com "MOTOR 300 300 500", troque o valor dela
+ * (ou inverta os fios do motor). Conferir depois da troca de pinos. */
+#define MOTOR_ESQ_INVERTIDO 0
+#define MOTOR_DIR_INVERTIDO 0
+
+/* 1 = slow decay (freio entre os pulsos, velocidade mais linear com o duty) nos dois sentidos.
+ * 0 = fast decay (solto entre os pulsos). Mudar isso muda a zona morta: medir DZ de novo. */
+#define MOTOR_DECAY_LENTO   1
 
 /* ------------------------------------------------------------------ */
 /* Zona morta                                                          */
 /* ------------------------------------------------------------------ */
 /* Menor comando que faz cada roda vencer a inercia do robo (medir com MODO_MEDIR_DZ).
- * |u| de 1..U_MAX e mapeado para DZ..U_MAX. Valor provisorio. */
-#define DZ_ESQ              300     /* [U] */
-#define DZ_DIR              300     /* [U] */
+ * |u| de 1..U_MAX e mapeado para DZ..U_MAX. Medido com a rampa da pagina do ESP: 20%. */
+#define DZ_ESQ              200     /* [U] */
+#define DZ_DIR              200     /* [U] */
 
 /* |u| abaixo disso vira 0 (freio), antes da compensacao. Evita a roda vibrar
  * pulando de +DZ para -DZ quando o comando cruza o zero. 20 = 2% de U_MAX. */
@@ -85,6 +82,11 @@
 /* ------------------------------------------------------------------ */
 /* Linha perdida                                                       */
 /* ------------------------------------------------------------------ */
+/* Sensores com defeito: bit i = 1 ignora o Si (calibrado sempre 0: fora da media e da
+ * deteccao de linha, e a calibracao nao reclama dele). O centro continua 3500.
+ * 0x01 = S0 (QTR OUT1, PA1) com defeito. 0x00 = usa todos. O SENS continua mostrando o bruto. */
+#define SENSOR_IGNORAR_MASK 0x01u
+
 /* Sensor calibrado (0..1000) acima disso "ve" a linha. Todos abaixo = linha perdida. */
 #define LIMIAR_LINHA        200     /* [0..1000, escala calibrada] */
 

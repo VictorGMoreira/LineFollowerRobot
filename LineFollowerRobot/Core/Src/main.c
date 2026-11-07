@@ -66,7 +66,7 @@ volatile bool tick_flag = false;
 
 /* Linha perdida NUNCA para o robo (prova de velocidade): ver Linha_Erro em control.c */
 
-#define TICK_MS               2                 /* TIM4 a 500 Hz */
+#define TICK_MS               2                 /* TIM2 a 500 Hz */
 
 static uint32_t     lost_ticks = 0;             /* ticks seguidos sem ver linha */
 static RobotState_t prev_state = STATE_INIT;    /* estado no tick anterior */
@@ -176,13 +176,7 @@ int main(void)
   Sensors_StartADC();
   Control_Init(&pid, 0.1f, 0.0f, 0.05f, 1000.0f);
   Comm_Init();                /* tem que vir DEPOIS do MX_USART1_UART_Init: arma a recepcao */
-  if (!Motor_DirOk(0)) {
-      Comm_SendLine("ERR MOTOR ESQ: pino de direcao (PB6) nao e saida no CubeMX - sem re/freio");
-  }
-  if (!Motor_DirOk(1)) {
-      Comm_SendLine("ERR MOTOR DIR: pino de direcao (PB4) nao e saida no CubeMX - sem re/freio");
-  }
-  HAL_TIM_Base_Start_IT(&htim4);
+  HAL_TIM_Base_Start_IT(&htim2);
 
   /* USER CODE END 2 */
 
@@ -340,7 +334,7 @@ void SystemClock_Config(void)
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM4) {
+    if (htim->Instance == TIM2) {
         tick_flag = true;
     }
 }

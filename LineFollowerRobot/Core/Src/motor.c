@@ -3,35 +3,36 @@
 #include "robot_config.h"
 
 /*
- * DRV8833, pino PWM = IN1/IN3, pino GPIO = IN2/IN4:
+ * DRV8833 com os dois pinos de cada ponte em PWM (xIN1 = canal A, xIN2 = canal B):
  *
- *   PWM  GPIO   motor
+ *   xIN1 xIN2   motor
  *    0    0     solto (coast)
- *    1    0     sentido A
- *    0    1     sentido B
+ *    1    0     sentido + (corrente OUT1 -> OUT2 / OUT3 -> OUT4)
+ *    0    1     sentido -
  *    1    1     freio
  *
- * Sentido A: GPIO LOW  + PWM com CCR = forca             -> fast decay (solto no resto do ciclo)
- * Sentido B: GPIO HIGH + PWM com CCR = periodo - forca   -> slow decay (freio no resto do ciclo)
- *            (o motor so e acionado na parte BAIXA do PWM, por isso o CCR e invertido)
- * Freio:     GPIO HIGH + CCR = periodo (saida 100% alta em PWM mode 1)
+ * Slow decay (MOTOR_DECAY_LENTO = 1):
+ *   +: A = 100%,  B = PWM com CCR = periodo - forca   (freio no resto do ciclo)
+ *   -: A = PWM com CCR = periodo - forca,  B = 100%
+ * Fast decay (MOTOR_DECAY_LENTO = 0):
+ *   +: A = forca, B = 0                               (solto no resto do ciclo)
+ *   -: A = 0,     B = forca
+ * Freio: A = B = 100% (CCR = periodo, saida sempre alta em PWM mode 1)
  */
 
 typedef struct {
     TIM_HandleTypeDef *htim;
-    uint32_t           canal;
-    GPIO_TypeDef      *dir_port;
-    uint16_t           dir_pin;
+    uint32_t           canal_a;    // xIN1
+    uint32_t           canal_b;    // xIN2
     bool               invertido;
     int32_t            dz;
-    bool               dir_ok;     // pino GPIO de direcao configurado como saida?
 } Motor_t;
 
 static Motor_t motores[2] = {
-    { &MOTOR_ESQ_TIM, MOTOR_ESQ_CANAL, MOTOR_ESQ_DIR_PORT, MOTOR_ESQ_DIR_PIN,
-      MOTOR_ESQ_INVERTIDO != 0, DZ_ESQ, false },
-    { &MOTOR_DIR_TIM, MOTOR_DIR_CANAL, MOTOR_DIR_DIR_PORT, MOTOR_DIR_DIR_PIN,
-      MOTOR_DIR_INVERTIDO != 0, DZ_DIR, false },
+    { &MOTOR_ESQ_TIM, MOTOR_ESQ_CANAL_A, MOTOR_ESQ_CANAL_B,
+      MOTOR_ESQ_INVERTIDO != 0, DZ_ESQ },
+    { &MOTOR_DIR_TIM, MOTOR_DIR_CANAL_A, MOTOR_DIR_CANAL_B,
+      MOTOR_DIR_INVERTIDO != 0, DZ_DIR },
 };
 
 static int32_t clamp_u(int32_t u)
@@ -41,10 +42,10 @@ static int32_t clamp_u(int32_t u)
     return u;
 }
 
-static bool pino_e_saida(GPIO_TypeDef *port, uint16_t pin)
+static void motor_pwm(Motor_t *m, uint32_t ccr_a, uint32_t ccr_b)
 {
-    uint32_t idx = (uint32_t)__builtin_ctz(pin);
-    return ((port->MODER >> (2u * idx)) & 0x3u) == 0x1u;    // 01 = general purpose output
+    __HAL_TIM_SET_COMPARE(m->htim, m->canal_a, ccr_a);
+    __HAL_TIM_SET_COMPARE(m->htim, m->canal_b, ccr_b);
 }
 
 // Aplica um comando ja compensado (-U_MAX..U_MAX) no hardware
@@ -56,26 +57,26 @@ static void motor_saida(Motor_t *m, int32_t u)
     }
 
     uint32_t periodo = __HAL_TIM_GET_AUTORELOAD(m->htim) + 1u;
+    uint32_t forca   = ((uint32_t)((u < 0) ? -u : u) * periodo) / U_MAX;
 
-    if (!m->dir_ok) {
-        // Sem pino de direcao so existe o sentido A (GPIO fica em LOW pelo pull-down da
-        // DRV8833): nao ha re nem freio. Negativo e zero viram "solto".
-        uint32_t ccr = (u > 0) ? ((uint32_t)u * periodo) / U_MAX : 0u;
-        __HAL_TIM_SET_COMPARE(m->htim, m->canal, ccr);
+    if (u == 0) {
+        motor_pwm(m, periodo, periodo);
         return;
     }
 
-    if (u == 0) {
-        HAL_GPIO_WritePin(m->dir_port, m->dir_pin, GPIO_PIN_SET);
-        __HAL_TIM_SET_COMPARE(m->htim, m->canal, periodo);
-    } else if (u > 0) {
-        HAL_GPIO_WritePin(m->dir_port, m->dir_pin, GPIO_PIN_RESET);
-        __HAL_TIM_SET_COMPARE(m->htim, m->canal, ((uint32_t)u * periodo) / U_MAX);
+#if MOTOR_DECAY_LENTO
+    if (u > 0) {
+        motor_pwm(m, periodo, periodo - forca);
     } else {
-        uint32_t forca = ((uint32_t)(-u) * periodo) / U_MAX;
-        HAL_GPIO_WritePin(m->dir_port, m->dir_pin, GPIO_PIN_SET);
-        __HAL_TIM_SET_COMPARE(m->htim, m->canal, periodo - forca);
+        motor_pwm(m, periodo - forca, periodo);
     }
+#else
+    if (u > 0) {
+        motor_pwm(m, forca, 0u);
+    } else {
+        motor_pwm(m, 0u, forca);
+    }
+#endif
 }
 
 // |u| < U_MIN_ATIVO -> 0; |u| de 1..U_MAX -> dz..U_MAX, mantendo o sinal
@@ -95,15 +96,10 @@ static int32_t compensar(int32_t u, int32_t dz)
 void Motor_Init(void)
 {
     for (int i = 0; i < 2; i++) {
-        motores[i].dir_ok = pino_e_saida(motores[i].dir_port, motores[i].dir_pin);
-        HAL_TIM_PWM_Start(motores[i].htim, motores[i].canal);
+        HAL_TIM_PWM_Start(motores[i].htim, motores[i].canal_a);
+        HAL_TIM_PWM_Start(motores[i].htim, motores[i].canal_b);
     }
     Motor_Freio();
-}
-
-bool Motor_DirOk(int lado)
-{
-    return motores[lado ? 1 : 0].dir_ok;
 }
 
 void Motor_Comando(int32_t u_esq, int32_t u_dir)
@@ -118,6 +114,18 @@ void Motor_ComandoBruto(int32_t u_esq, int32_t u_dir)
     motor_saida(&motores[1], u_dir);
 }
 
+void Motor_SetDZ(int32_t dz_esq, int32_t dz_dir)
+{
+    motores[0].dz = dz_esq;
+    motores[1].dz = dz_dir;
+}
+
+void Motor_GetDZ(int32_t *dz_esq, int32_t *dz_dir)
+{
+    *dz_esq = motores[0].dz;
+    *dz_dir = motores[1].dz;
+}
+
 void Motor_Freio(void)
 {
     motor_saida(&motores[0], 0);
@@ -127,9 +135,6 @@ void Motor_Freio(void)
 void Motor_Solto(void)
 {
     for (int i = 0; i < 2; i++) {
-        if (motores[i].dir_ok) {
-            HAL_GPIO_WritePin(motores[i].dir_port, motores[i].dir_pin, GPIO_PIN_RESET);
-        }
-        __HAL_TIM_SET_COMPARE(motores[i].htim, motores[i].canal, 0u);
+        motor_pwm(&motores[i], 0u, 0u);
     }
 }

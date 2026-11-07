@@ -18,7 +18,7 @@
 // DESCEREM em cima da linha, troque para 1.
 #define SENSOR_INVERT        0
 
-// 0 = S0 (PA0) fica do lado DIREITO do robo (olhando de tras, no sentido de andar).
+// 0 = S0 (QTR OUT1, PA1) fica do lado DIREITO do robo (olhando de tras, no sentido de andar).
 // 1 = S0 fica do lado ESQUERDO. Teste: robo parado com a linha sob o lado direito
 // da barra -> SENS tem que dar POS perto de 0. Se der perto de 7000, troque.
 // Muda so o calculo da posicao; o SENS continua listando R/N na ordem dos pinos.
